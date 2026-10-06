@@ -24,7 +24,7 @@ To install and run from source (assuming a shell running bash or equivalent)
 - Create project directory
   : mkdir nexus; cd nexus
 - Get the source from github
-  : git clone https://github.com/aalexei/nexus.git nexus-github
+  : git clone https://github.com/abhii-roy/nexus.git nexus-github
 - Create a virtual python environment
   : python3 -m venv nexus-env
 - Activate it
@@ -34,6 +34,339 @@ To install and run from source (assuming a shell running bash or equivalent)
 - Launch Nexus
   : ./nexus-github/runnexus.py
 - Enjoy
+
+* Map-window layout
+
+Maps open in a comfortable, screen-sized window instead of the old 400x400
+default. Contents starts around 260 pixels wide, leaving most of the window for
+the map. Controls start on one compact toolbar row with 24px icons, short
+Text/Todo/Editor/Size labels and a bounded filter field. Narrow windows use
+overflow menus instead of adding a second row. Closing remembers the main window's size, position, maximized state,
+monitor and Contents width/visibility. Windows are brought back onto an available
+screen if a monitor is disconnected. The old tiny startup size is upgraded once;
+deliberate smaller sizes saved afterward are respected.
+
+The map fits once after the opening toolbars/sidebar are laid out. Resizing the
+window afterward does not reset your zoom. Returning from presentation preserves
+the editing window's geometry, and closing presentation does not force the next
+editing session into fullscreen. Floating node-editor settings remain separate.
+
+* Keyboard navigation (map editing)
+
+With a single node selected on the map:
+- Text mode (toolbar or T) is on by default and remembered. Simple text edits
+  happen directly on the map; complex/mixed-content nodes use the full editor.
+- Tab creates a child and starts inline typing; with no selection, it uses the root.
+- Enter or F2 edits the selected node; double-clicking its text does the same.
+- Cmd+Enter always opens the full node editor (Ctrl+Enter elsewhere).
+- Shift+Enter creates a sibling; on the root it creates a child.
+- Up/Down selects a visible node above/below across branches, preferring labels
+  in the same visual column. Hidden/collapsed nodes are skipped.
+- Shift+Up/Down extends the selection using the same visual navigation.
+  Shift+Left/Right extends through the parent/first visible child on that screen
+  side without expanding
+  collapsed branches. The active node has a stronger blue dashed outline.
+  Reversing the last direction retraces the exact selection path and removes
+  only nodes added on that path, preserving any earlier mouse selection.
+  Releasing Shift keeps the selection; Shift+click starts a fresh path.
+- With multiple nodes selected, a plain arrow keeps only the active node and
+  then navigates one step. Escape keeps only the active node; a second Escape
+  uses the existing Deselect All action. While typing, Escape finishes typing
+  and Shift+arrows select text instead. Selection changes are not map Undo edits.
+- Copy, Cut and Delete act on whole selected branches, including descendants.
+  Selecting both parent and child does not copy/delete/move the child twice.
+- Option+Up/Down moves the selected branch above/below a visible sibling on
+  the same side (Alt+Up/Down on other platforms). It exchanges vertical slots,
+  keeps each subtree attached, and is undoable. At the first/last sibling it
+  does nothing; it requires one selected non-root node and ignores key repeat.
+- Left/Right respects the branch's screen side. On the root, Left enters the
+  first left-hand child and Right the first right-hand child. On a left-hand
+  branch, Right returns to the parent and Left enters left-hand children; the
+  reverse applies to right-hand branches. Returning to a parent takes priority
+  if a folded-back child lies on the same side. Child order is top-to-bottom.
+  Visible children are preferred over expanding hidden ones. If there is no
+  visible target, an outward arrow expands hidden children on that side first;
+  press again to enter. Shift-selection never expands hidden children.
+  Fully transparent labels are skipped. If labels completely overlap or a
+  folded-back child competes with its parent, use Up/Down or Contents to pick
+  that child explicitly; navigation does not automatically rearrange the map.
+- Cmd+arrow pans the whiteboard without changing selection (Ctrl+arrow on other platforms).
+- Plain arrows also navigate when a canvas scrollbar has focus. At the end of
+  a branch they leave the view still; scrolling only reveals a newly selected offscreen node.
+- Space collapses or expands the selected node's children.
+- Deleting or cutting a branch selects the next visible sibling below it,
+  otherwise the previous sibling, otherwise its parent. Keyboard focus returns
+  to the map, revealing the selected node if needed without changing zoom.
+  For multiple deleted branches, the topmost base branch determines the fallback.
+- Cmd+Z restores the deleted base branch selection and canvas keyboard focus.
+  Undoing other edits retains surviving selection; undoing a newly created node
+  falls back to its parent. Undo does not change zoom.
+- Z fits the selected node(s); with no selection, it fits the whole map.
+- Shift+Z selects the parent and fits it with its visible descendants. Repeat
+  to move up another level; on the root it fits the root branch. Hidden children
+  stay hidden. It requires one selected node and works in map edit mode.
+- Cmd+0 fits the whole map (Ctrl+0 on other platforms).
+
+New nodes are placed outward on the current branch's side, below existing
+children with space reserved for a label. Existing nodes are not rearranged.
+After editing, the new node's actual label size is checked and only that node
+is shifted down if necessary to avoid other labels.
+Closing the editor restores selection and keyboard focus to the edited node
+(or its parent if the new node was empty and removed). Selection is scrolled
+into view without changing zoom. Text-editor and presentation shortcuts retain
+their existing behaviour. Except for Tab's root fallback, editing, creation,
+reordering and collapse commands need one selected node. With multiple nodes
+selected those commands do nothing. Navigation and Shift-selection arrows can
+be held down; creation and collapse commands ignore key repeat.
+
+* Inline typing and full-editor controls
+
+While a text cursor is active on the map:
+- Enter saves and starts a sibling; Tab saves and starts a child.
+- Shift+Enter inserts a newline. Escape saves and returns to node selection.
+- Empty new nodes are removed on Escape/click-away; cleared existing nodes stay.
+  Enter and Tab do not create further nodes from an empty note.
+- Letters, arrows, Backspace/Delete, Cmd+A/C/X/V/Z and Cmd+B/I/U belong to text,
+  not map actions. Cmd+Z undoes text while typing, and map changes after finishing.
+- Pasted text stays in one node, including newlines, without extra HTML/image
+  content. Use Cmd+Enter for images or drawings. Held-key repeats and input-method
+  preedit confirmation do not repeatedly create nodes.
+- Text is checkpointed after a short pause, and saved before changing nodes or
+  opening the popup. Checkpoints share one map Undo entry per typing session.
+- New text uses Helvetica, 14 pt, black. Existing note fonts are not changed.
+
+View > Typing Hints shows/hides the small inline shortcut hint and remembers
+your choice. All controls remain available in Cmd+/ even with hints hidden.
+
+Map opening reuses bounded, in-memory text parsing/cleanup results. Contents
+avoids duplicate parsing and plain labels skip HTML parsing. Existing HTML
+cleanup, fonts, formatting, links and stored map data are unchanged. Repeated
+opens of larger text maps benefit most; this is not a zero-lag guarantee.
+
+The full editor initially opens as a normal floating window about half the
+available screen width. Its geometry, monitor and zoom are remembered across
+instances/restarts; disconnected-monitor positions are moved onto an available
+screen. Text is not automatically enlarged to fill the window. macOS virtual
+Desktops/Spaces are not explicitly controlled by Nexus.
+
+In the full editor, new pasted content goes below existing content with clear
+spacing. External images keep their original pixels and proportions, with a
+display size of at most 380 by 280 canvas units; small images are not enlarged.
+Nexus copies retain their relative positions, rotations and sizes. Existing
+node layouts are never automatically rearranged. Pasted content is selected
+with resize handles, and Fit content beside the zoom controls shows the whole
+node without changing its saved layout. Copy provides both editable Nexus
+content and a transparent image for other apps, excluding the editor grid.
+
+On the map, select one node and approach a corner to reveal its blue resize
+handle. Only the nearby handle appears; it hides when the pointer leaves and
+stays visible during dragging. Drag the handle to resize the node's text,
+images and drawings together, proportionally, without opening the editor.
+Children keep their displayed positions and sizes, including hidden children
+when revealed. The connecting curves adjust to the resized node. Original
+image pixels are retained. Each drag is one Undo step; Escape cancels a drag.
+Handles are hidden during typing, in presentation mode and for multi-selection.
+The existing +/- branch-scale commands still scale branches, not just content.
+
+Cmd+/ opens a searchable keyboard shortcut reference from the map or node
+editor (Ctrl+/ on other platforms). It is also under Help > Keyboard Shortcuts.
+Press Escape, Cmd+/ again, or Close to dismiss it. The reference separates map,
+typing, editor-tool, presentation and recording controls.
+
+While typing, Escape finishes the text and returns to selection inside the
+editor. A second Escape saves and closes the editor. Outside text entry, T
+selects Text and P selects Pen (B remains an alias). Letters stay ordinary
+text while typing. Enter saves and closes directly; Shift+Enter adds a newline.
+The editor's bottom strip shows the active mode (Typing, Select, Text, Pen,
+Highlighter, Eraser or Properties) and the relevant Escape hint.
+
+* Todo mode and checkboxes
+
+Cmd+Shift+T (Ctrl+Shift+T elsewhere), Edit > Todo mode, or the toolbar's
+Todo mode ON/OFF button controls newly created nodes only. It never converts
+the current note or changes an existing task's state, including while typing.
+Todo mode enables inline Text mode and starts OFF in each new/reopened window.
+Turning Text mode off also leaves Todo mode.
+
+Cmd+D (Ctrl+D elsewhere) or Edit > Cycle Node Task State cycles one selected
+node, or the current inline text node: Note → Todo → Doing → Done → Note.
+With Doing disabled it skips that state. Cycling never changes Todo creation
+mode. Returning to Note removes the checkbox and task status, preserving text,
+images, drawings and child positions. While typing, the cursor and selection
+stay intact. No selection/multiple selections do nothing. Cmd+Enter continues
+to open the full editor; Cmd+T remains Presentation mode.
+
+Each cycle on an existing node is a separate map Undo operation. While typing,
+Cmd+Z remains text Undo; finish typing before undoing task changes. Task changes
+on a new node still being entered share its creation Undo, preventing orphan
+history entries. Failed saves leave the current state/editor intact.
+
+While Todo mode is ON, Enter saves and creates an unchecked sibling task; Tab
+creates an unchecked child task. Shift+Enter inserts a newline in the current
+task. Empty Enter/Tab create nothing, held-key repeats do not multiply tasks,
+and pasted multiline text stays in one node. Esc finishes editing but leaves
+Todo mode unchanged. Cmd+Shift+T turns it off so new nodes are ordinary notes;
+existing checkboxes and completion states remain intact.
+
+Click a checkbox on the map or in Contents to cycle Todo (empty) → Doing
+(yellow, dash) → Done (green, check) → Todo. Only Done gets strikethrough.
+Settings > Enable Doing state (yellow) is ON by default and remembered across
+restarts. Turn it off for simple Todo/Done checkboxes. Existing Doing tasks keep
+their progress; their next click advances to Done even while Doing is disabled.
+The setting does not resize, complete or rewrite any tasks.
+Checking a parent does not check its children. Active inline text is saved
+before completion changes; failed saves keep the editor open and do not advance
+to another task. Completion has its own map Undo entry. Cmd+Z while typing
+remains text Undo; finish editing to undo completion or other map changes.
+New empty tasks cannot be checked and are discarded when editing ends.
+
+Task status is stored separately from text/fonts. Completion strikes through
+the displayed text without rewriting its formatting. Checkboxes have expanded
+screen click targets for small branches and do not initiate node dragging.
+Contents updates task status in place, preserving rows and folding. Task status
+survives save/reopen, Copy/Paste, deletion and Undo. Text exports use [ ] / [-] / [x]
+markers; PDF/SVG render the checkbox and completion decoration. The full
+mixed-content editor remains unchanged.
+
+* Child-size ratio
+
+The top toolbar's Child size button, Edit > Child size, or Cmd+Shift+R
+(Ctrl+Shift+R elsewhere) opens a per-map ratio chooser. Use the shortcut outside
+text typing; the toolbar button saves inline text before opening the chooser.
+Presets are 50% (original shrinking), 85% (gentle shrinking), and 100%
+(same size), with custom percentages from 5% to 200%.
+
+The chosen ratio controls newly created deeper nodes relative to their parent;
+it does not change canvas zoom, fonts, the main topic, or first-level branch sizes.
+Existing maps retain their original creation policy until a ratio is explicitly
+saved. "Resize this map’s existing nested nodes" is enabled by default, so
+Apply to map resizes the current nested nodes, including collapsed ones. The
+chooser shows how many node ratios will change and confirms the result in the
+status bar. Uncheck it to explicitly save for new nodes only; the button and
+summary then explain that the current graph will not resize. Positions and angles are
+retained, so enlarged labels may overlap; no automatic rearrangement is performed.
+The setting and any existing-node resizing are saved together and can be undone
+with Cmd+Z / Ctrl+Z. Cancel changes nothing.
+
+* Find a node
+
+Cmd+F opens Find a Node from the map (Ctrl+F elsewhere), also under Edit.
+Search matches node text case-insensitively, including collapsed branches;
+parent paths distinguish duplicate labels. Up/Down chooses a result and Enter
+jumps to it. Only the hidden path to that node is revealed, without changing
+zoom. Escape cancels and returns keyboard focus to the map. Searches display
+up to 200 results. Search is available in map edit mode, not inside node typing
+or presentation mode. Revealing a hidden path is undoable.
+
+* Contents sidebar
+
+Contents is a clean table of contents for the map, shown on the left by default.
+Cmd+Shift+O (Ctrl+Shift+O elsewhere) or View > Contents hides or reopens it;
+that choice is remembered on closing. The shortcut is also listed in Cmd+/.
+Each row shows the first readable line of a node, with children indented below
+their parent. HTML formatting, internal IDs, positions, tags and settings are
+not displayed. Drawing/image-only nodes have small preview thumbnails.
+
+Click a row to select and reveal that node on the map without changing zoom.
+The list retains keyboard focus so Up/Down can continue browsing. Enter (or a
+double-click) uses the same inline editor or mixed-content popup; finishing
+returns to map selection. Selecting on the map highlights the matching row and opens its ancestor
+rows in Contents. Multiple selection is reflected in both directions.
+
+The list's fold arrows only fold the list; they do not hide branches on the
+map or modify saved content. Nodes hidden on the map still appear in Contents;
+choosing one reveals only the path needed to reach it. The list updates after
+editing, creating, deleting, reordering and Undo. Navigation is disabled during
+node editing, presentation and recording. Contents is not a separate Markdown
+file or a second text editor: all content stays in the existing map.
+
+Text-only updates refresh changed Contents rows without rebuilding the tree,
+preserving folding and scroll position. Keyboard selection updates only changed
+outlines and rows. Visible-node membership is cached until scene structure or
+visibility changes; navigation always uses current node positions. Full-canvas
+redraw remains enabled to avoid stale branch/text trails.
+
+* Recovery snapshots
+
+A database snapshot is made when opening a map, every five minutes if the
+database has changed, and on closing if changed. File > Create Recovery
+Snapshot Now makes one immediately. These capture database-saved content;
+unsaved typing still inside the node editor is not included.
+
+File > Recovery Snapshots lists the latest ten snapshots for this map, with
+timestamps. Recover Copy creates and opens a NEW .nex file; it never overwrites
+the original, another existing file, or a snapshot. Choose an unused filename.
+Snapshots are validated SQLite backups, not copies of an open database file.
+Snapshot failures are reported in the status bar without stopping editing.
+
+On macOS snapshots are stored under
+~/Library/Application Support/Ectropy/Nexus/recovery/~, in a separate folder
+for each map's absolute path, outside the project and Git repository. The
+recovery dialog's Open Snapshot Folder button reveals that map's folder.
+Old snapshots beyond the ten-version limit expire automatically; maps moved
+to a different path have a different snapshot folder.
+
+* Welcome screen
+
+The welcome window provides New Map, Open Map, and Continue for the last
+available map. Search matches map names and folders; Up/Down selects a result
+and Enter opens it. A single click selects; double-click opens. Use the star
+to pin a map, or right-click to locate a moved file or remove a history entry
+without deleting its file. Maps can also be dropped into the window.
+
+Recent, On This Mac and Starred are separate tabs with their own query, selection and
+scroll position. On This Mac discovers =.nex= and =.nexus= files using Spotlight
+in the background, including maps absent from Recent. Empty search shows the
+newest modified maps first; typing fuzzy-matches filenames (for example,
+=qdts= can match =Quantum-dots.nex=), with exact/prefix matches ranked ahead
+of loose matches. Each row shows its filename and folder; its tooltip has the
+full path. Enter or double-click opens it; right-click offers Show in Finder.
+
+Spotlight can miss excluded/unindexed locations. Search a folder… scans an
+explicitly chosen folder and its subfolders in the background, adding results
+for this welcome session without modifying files. Refresh reruns discovery.
+Discovery skips Trash and Nexus recovery snapshots, deduplicates resolved
+paths and reports failures instead of replacing existing results. Discovery
+is limited to 20,000 maps per source and the list displays the best 500 matches;
+use a narrower folder if the limit is reached. This searches filenames, not
+node text inside maps. Closing welcome cancels its pending searches.
+
+Starred contains only maps you have starred, independently of Recent. Removing
+a map from Recent does not unstar it or delete its file. Click its star again
+to remove it from Starred. The routine map count/indexing explanation is hidden;
+search failures and result-limit warnings still appear when necessary.
+
+Each row has a bin beside its star. The bin asks Move to Trash?, showing the
+filename and full path, with Cancel as the default/Escape action. Only after
+a successful system Trash move is the map removed from Recent, Starred and
+cached search results. Maps open in this Nexus instance, missing/non-map files,
+folders, changed symlinks and replaced files are rejected. A failed move leaves
+the library intact; there is no permanent-delete fallback. Restore from macOS
+Trash if needed, then Refresh to find the restored map again.
+
+Hover a map row for about 250 ms to preview its last saved diagram without
+opening it or changing selection. The popup is non-interactive and does not
+take keyboard focus. Mouse-away, clicks, scrolling, tab/search changes and
+map-file changes dismiss it; star/bin controls do not trigger previews.
+
+Thumbnails are generated in a separate offscreen process from a private copy,
+never through the writable map loader or automatic format conversion. Saved
+revisions are warmed after a brief idle period, not on every keystroke. A
+private, versioned cache outside the repo keeps at most 128 thumbnails/50 MiB.
+Cache keys include file identity, timestamp/size and WAL/journal state. Partial
+or corrupt images, stale requests, deleted files, crashes and timeouts do not
+replace the current popup with an old map or interrupt editing. Unsupported,
+legacy, oversized or excessively deep maps show Preview unavailable; open the
+map normally to inspect it. Unsaved full-editor content is not previewed.
+
+Image-heavy maps can be individually opted in through the local
+=previewLargeImageMaps= settings list of exact file paths. That bounded profile
+reduces images only in the temporary preview copy, preserving their map layout
+and leaving the saved originals unchanged. Other maps retain normal limits.
+
+The window remembers its size and position and adapts to light or dark
+appearance. Cancelling a file picker returns to the welcome screen. Recover
+a map creates a separate copy from a recovery snapshot.
 
 * Detailed docs
 

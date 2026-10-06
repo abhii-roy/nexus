@@ -27,7 +27,7 @@ from functools import reduce
 import webbrowser, tempfile
 
 import webbrowser, urllib.parse, logging
-from . import graphics, resources, interpreter, graphydb, nexusgraph, config
+from . import graphics, resources, interpreter, graphydb, nexusgraph, config, shortcuts, workflow, contents, branch_size, window_layout, tasks, map_preview
 from math import sqrt, log, sinh, cosh, tanh, atan2, fmod, pi, cos, sin
 import re, subprocess
 import apsw
@@ -450,73 +450,8 @@ def createViewImage(view, width, height, removebackground=False):
     return image
 
 #----------------------------------------------------------------------
-class NewOrOpenDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        logging.debug('Launching NewOrOpenDialog')
-
-        self.setModal(True)
-        self.setWindowTitle("Create or Open Nexus Map")
-
-        baselayout = QtWidgets.QVBoxLayout()
-        self.setLayout(baselayout)
-
-        baselayout.addWidget(QtWidgets.QLabel("Recent Maps (click to open):"))
-        listWidget = QtWidgets.QListWidget(self)
-        baselayout.addWidget(listWidget)
-
-        listWidget.itemClicked.connect(self.recentFileOpen)
-
-        # Update the recent files
-        settings = QtCore.QSettings("Ectropy", "Nexus")
-        files = settings.value('recentFileList', [])
-
-        self.maps = {}
-        for f in files:
-            name = QtCore.QFileInfo(f).fileName()
-            path = QtCore.QFileInfo(f).path()
-            text = "{} [{}]".format(name, path)
-            self.maps[text] = f
-
-            item = QtWidgets.QListWidgetItem(text, listWidget)
-
-        hlayout = QtWidgets.QHBoxLayout()
-        baselayout.addLayout(hlayout)
-
-        button = QtWidgets.QPushButton("Quit")
-        button.clicked.connect(self.reject)
-        hlayout.addWidget(button)
-        button = QtWidgets.QPushButton("New map")
-        button.setToolTip("Create a new map")
-        button.clicked.connect(self.newmap)
-        hlayout.addWidget(button)
-        button = QtWidgets.QPushButton("Open another")
-        button.setToolTip("Open another map")
-        button.clicked.connect(self.openmap)
-        button.setDefault(True)
-        hlayout.addWidget(button)
-
-    def recentFileOpen(self, item):
-        path = self.maps[item.text()]
-        app = QtWidgets.QApplication.instance()
-        app.raiseOrOpen(path)
-
-        self.accept()
-
-    def newmap(self):
-        app = QtWidgets.QApplication.instance()
-        app.dialogNew()
-        self.accept()
-
-    def openmap(self):
-        app = QtWidgets.QApplication.instance()
-        self.hide()
-        w = app.dialogOpen()
-        if w is not None:
-            self.accept()
-        else:
-            self.reject()
+from . import welcome
+from .welcome import NewOrOpenDialog
 
 
 #----------------------------------------------------------------------
@@ -579,8 +514,9 @@ class NexusApplication(QtWidgets.QApplication):
         logging.debug("raise or open: '%s'", fileName)
         if len(fileName) == 0:
             return None
+        fileName = welcome.normalize(fileName)
         for window in self.windowList():
-            if window.scene.graph.path == fileName:
+            if welcome.normalize(window.scene.graph.path) == fileName:
                 w = window
                 logging.debug("Raising %s", fileName)
                 break
@@ -824,6 +760,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.view = graphics.NexusView(self.scene)
         self.setCentralWidget(self.view)
 
+        self.contentsDock = QtWidgets.QDockWidget(self.tr('Contents'), self)
+        self.contentsDock.setObjectName('contentsDock')
+        self.contentsPanel = contents.ContentsPanel(self)
+        self.contentsDock.setWidget(self.contentsPanel)
+        self.contentsDock.setMinimumWidth(190)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self.contentsDock)
+        self.contentsAct = self.contentsDock.toggleViewAction()
+        self.contentsAct.setShortcut('Ctrl+Shift+O')
+        self.contentsAct.setAutoRepeat(False)
+
         #
         # Views widget
         #
@@ -845,8 +791,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.createMenus()
         self.createStatusBar()
 
-        self.readSettings()
-
         self.scene.statusMessage.connect(self.showMessage)
         self.scene.linkClicked.connect(self.linkClicked)
 
@@ -860,25 +804,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("{}".format(Path(self.scene.graph.path).name))
         self.showMessage("Nexus Map loaded")
 
-        rect = QtCore.QRectF()
-        for item in self.scene.allChildStems():
-            rect = rect.united(item.sceneBoundingRect())
-
-        self.view.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-
         # Update the recent files
-        settings = QtCore.QSettings("Ectropy", "Nexus")
-        files = settings.value('recentFileList', [])
-
-        try:
-            files.remove(fileName)
-        except ValueError:
-            pass
-
-        files.insert(0, fileName)
-        del files[self.MaxRecentFiles:]
-
-        settings.setValue('recentFileList', files)
+        welcome.record_recent(fileName)
 
         self.updateRecentFilesMenu()
 
@@ -908,6 +835,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._windowflags = self.windowFlags()
 
         self.setMode()
+        self.readSettings()
+        self._initialLayoutDone = False
+        self._initialLayoutTimer = QtCore.QTimer(self)
+        self._initialLayoutTimer.setSingleShot(True)
+        self._initialLayoutTimer.timeout.connect(self.fitInitialMap)
+        self.recovery = workflow.RecoveryManager(self)
+        self.previewWarmup = map_preview.IdlePreview(self)
 
         # Initialize file system watcher
         # Not working - see notes in onFileChanged()
@@ -975,7 +909,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
 
+        self.view.inline.finish()
+        if self.view.inline.item is not None:
+            event.ignore()
+            return
         self.writeSettings()
+        if hasattr(self, 'previewWarmup'):
+            self.previewWarmup.stop()
+        self.contentsPanel.stop()
+        if hasattr(self, 'recovery'):
+            self.recovery.timer.stop()
+            self.recovery.capture()
         self.scene.graph.close()
         event.accept()
 
@@ -1136,11 +1080,11 @@ class MainWindow(QtWidgets.QMainWindow):
         fp = open(path, "w")
 
         root = self.scene.root()
-        fp.write(' '.join(root.titles()) + '\n')
+        fp.write(tasks.export_title(root) + '\n')
 
         for child in root.allChildStems():
             if 'hide' not in child.getTags() and child.isVisible():
-                title = ' '.join(child.titles())
+                title = tasks.export_title(child)
                 level = child.depth
                 fp.write("\t"*level+title+"\n")
 
@@ -1463,7 +1407,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cutAct.setShortcut(QtGui.QKeySequence.StandardKey.Cut)
         self.cutAct.setStatusTip(self.tr("Cut the current selection's "
                                          "contents to the clipboard"))
-        self.cutAct.triggered.connect(self.scene.cut)
+        self.cutAct.triggered.connect(lambda: self.editCommand('cut'))
 
         # ----------------------------------------------------------------------------------
         self.copyAct = QtGui.QAction(QtGui.QIcon(":/images/edit-copy.svg"),
@@ -1471,7 +1415,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.copyAct.setShortcut(QtGui.QKeySequence.StandardKey.Copy)
         self.copyAct.setStatusTip(self.tr("Copy the current selection's "
                                           "contents to the clipboard"))
-        self.copyAct.triggered.connect(self.scene.copy)
+        self.copyAct.triggered.connect(lambda: self.editCommand('copy'))
 
         # ----------------------------------------------------------------------------------
         self.copyStemLinkAct = QtGui.QAction(QtGui.QIcon(":/images/edit-copy.svg"),
@@ -1487,7 +1431,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pasteAct.setShortcut(QtGui.QKeySequence.StandardKey.Paste)
         self.pasteAct.setStatusTip(self.tr("Paste the clipboard's contents "
                                            "into the current selection"))
-        self.pasteAct.triggered.connect(self.scene.paste)
+        self.pasteAct.triggered.connect(lambda: self.editCommand('paste'))
 
         # ----------------------------------------------------------------------------------
         self.deleteAct = QtGui.QAction(QtGui.QIcon(":/images/edit-delete.svg"),
@@ -1496,7 +1440,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Backspace is only defined on Apple and mapped to Del (why oh why)
         self.deleteAct.setShortcuts([QtGui.QKeySequence.StandardKey.Delete,QtGui.QKeySequence.StandardKey.Backspace])
         self.deleteAct.setStatusTip(self.tr("Delete selection"))
-        self.deleteAct.triggered.connect(self.scene.delete)
+        self.deleteAct.triggered.connect(lambda: self.editCommand('delete'))
 
         # ----------------------------------------------------------------------------------
         self.undoAct = QtGui.QAction(QtGui.QIcon(":/images/undo.svg"),
@@ -1504,6 +1448,59 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undoAct.setShortcut(QtGui.QKeySequence.StandardKey.Undo)
         self.undoAct.setStatusTip(self.tr("Undo last change"))
         self.undoAct.triggered.connect(self.undo)
+
+        self.textModeAct = QtGui.QAction(self.tr('Text mode'), self)
+        self.textModeAct.setCheckable(True)
+        self.textModeAct.setChecked(self.view.inline.textMode)
+        self.textModeAct.setShortcut('T')
+        self.textModeAct.setAutoRepeat(False)
+        self.textModeAct.setToolTip('Text mode (T): edit simple text directly on the map')
+        self.textModeAct.triggered.connect(self.view.inline.setMode)
+        self.view.inline.modeChanged.connect(self.textModeAct.setChecked)
+        self.todoModeAct = QtGui.QAction(self.tr('Todo mode OFF'), self)
+        self.todoModeAct.setCheckable(True)
+        self.todoModeAct.setShortcut('Ctrl+Shift+T')
+        self.todoModeAct.setAutoRepeat(False)
+        self.todoModeAct.setToolTip('Cmd+Shift+T / Ctrl+Shift+T: create new nodes as tasks. Existing nodes stay unchanged. Cmd+D / Ctrl+D cycles the current node.')
+        self.todoModeAct.triggered.connect(self.view.tasks.setMode)
+        self.cycleTaskAct = QtGui.QAction(self.tr('Cycle Node Task State'), self)
+        self.cycleTaskAct.setShortcut('Ctrl+D')
+        self.cycleTaskAct.setAutoRepeat(False)
+        self.cycleTaskAct.setToolTip('Cmd+D / Ctrl+D: Note → Todo → Doing → Done → Note; does not change Todo creation mode')
+        self.cycleTaskAct.triggered.connect(self.view.tasks.cycleCurrent)
+        def task_mode_changed(enabled):
+            self.todoModeAct.setChecked(enabled)
+            self.todoModeAct.setText('Todo mode ON' if enabled else 'Todo mode OFF')
+            if hasattr(self, 'todoModeButton'):
+                self.todoModeButton.setText('Todo ON' if enabled else 'Todo OFF')
+        self.view.tasks.modeChanged.connect(task_mode_changed)
+        self.doingStateAct = QtGui.QAction(self.tr('Enable Doing state (yellow)'), self)
+        self.doingStateAct.setCheckable(True)
+        self.doingStateAct.setChecked(tasks.doing_enabled())
+        self.doingStateAct.setToolTip('ON: Todo → Doing → Done. OFF: Todo → Done. Existing task progress is preserved.')
+        self.doingStateAct.triggered.connect(self.view.tasks.setDoingEnabled)
+        self.fullEditorAct = QtGui.QAction(self.tr('Open Full Node Editor'), self)
+        self.fullEditorAct.setShortcuts(['Ctrl+Return', 'Ctrl+Enter'])
+        self.fullEditorAct.setAutoRepeat(False)
+        self.fullEditorAct.triggered.connect(self.openFullEditor)
+        self.typingHintsAct = QtGui.QAction(self.tr('Typing Hints'), self)
+        self.typingHintsAct.setCheckable(True)
+        self.typingHintsAct.setChecked(self.view.inline.showHints)
+        self.typingHintsAct.triggered.connect(self.view.inline.setHints)
+
+        self.findNodeAct = QtGui.QAction(self.tr('Find a Node…'), self)
+        self.findNodeAct.setShortcut(QtGui.QKeySequence.StandardKey.Find)
+        self.findNodeAct.setAutoRepeat(False)
+        self.findNodeAct.triggered.connect(self.findNode)
+        self.childSizeAct = QtGui.QAction(QtGui.QIcon(':/images/zoom-one.svg'), self.tr('Child size…'), self)
+        self.childSizeAct.setShortcut('Ctrl+Shift+R')
+        self.childSizeAct.setAutoRepeat(False)
+        self.childSizeAct.setToolTip('Child size (Cmd+Shift+R / Ctrl+Shift+R): choose how deeper nodes shrink')
+        self.childSizeAct.triggered.connect(self.showChildSize)
+        self.recoveryAct = QtGui.QAction(self.tr('Recovery Snapshots…'), self)
+        self.recoveryAct.triggered.connect(lambda: self.recovery.showSnapshots())
+        self.snapshotAct = QtGui.QAction(self.tr('Create Recovery Snapshot Now'), self)
+        self.snapshotAct.triggered.connect(self.createRecoverySnapshot)
 
         # ----------------------------------------------------------------------------------
         self.setScaleAct = QtGui.QAction(self.tr("Set Scale"), self)
@@ -1586,6 +1583,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.aboutAct.setStatusTip(self.tr("Show the application's About box"))
         self.aboutAct.triggered.connect(self.about)
 
+        self.keyboardShortcutsAct = QtGui.QAction(self.tr("Keyboard Shortcuts…"), self)
+        self.keyboardShortcutsAct.setShortcut("Ctrl+/")
+        self.keyboardShortcutsAct.setStatusTip(self.tr("Show all keyboard shortcuts"))
+        self.keyboardShortcutsAct.triggered.connect(lambda: shortcuts.show_keyboard_shortcuts(self))
+
         # ----------------------------------------------------------------------------------
         self.zoomInAct = QtGui.QAction(QtGui.QIcon(":/images/zoom-in.svg"),
                                        self.tr("Zoom In"), self)
@@ -1613,6 +1615,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.zoomSelectionAct.setShortcut("Z")
         self.zoomSelectionAct.setStatusTip(self.tr("Zoom to Selection"))
         self.zoomSelectionAct.triggered.connect(self.view.zoomSelection)
+
+        self.zoomParentAct = QtGui.QAction(self.tr("Zoom to Parent Branch"), self)
+        self.zoomParentAct.setShortcut("Shift+Z")
+        self.zoomParentAct.setAutoRepeat(False)
+        self.zoomParentAct.setStatusTip(self.tr("Select the parent and fit its visible branch"))
+        self.zoomParentAct.triggered.connect(self.view.zoomParent)
 
         # ----------------------------------------------------------------------------------
         self.zoomOriginalAct = QtGui.QAction(QtGui.QIcon(":/images/zoom-one.svg"),
@@ -1764,6 +1772,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fileMenu.addSeparator()
         # self.fileMenu.addAction(self.saveAct)
         self.fileMenu.addAction(self.saveAsAct)
+        self.fileMenu.addAction(self.snapshotAct)
+        self.fileMenu.addAction(self.recoveryAct)
         self.fileMenu.addSeparator()
         self.fileMenu.addAction(self.printMapAct)
         self.fileMenu.addAction(self.printViewsAct)
@@ -1777,6 +1787,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.editMenu = self.menuBar().addMenu(self.tr("&Edit"))
         self.editMenu.addAction(self.undoAct)
+        self.editMenu.addAction(self.findNodeAct)
+        self.editMenu.addAction(self.textModeAct)
+        self.editMenu.addAction(self.todoModeAct)
+        self.editMenu.addAction(self.cycleTaskAct)
+        self.editMenu.addAction(self.fullEditorAct)
         self.editMenu.addSeparator()
         self.editMenu.addAction(self.cutAct)
         self.editMenu.addAction(self.copyAct)
@@ -1791,6 +1806,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.editMenu.addAction(self.deselectAct)
         self.editMenu.addSeparator()
         self.editMenu.addAction(self.setScaleAct)
+        self.editMenu.addAction(self.childSizeAct)
         self.editMenu.addAction(self.scaleByAct)
         self.editMenu.addAction(self.increaseScaleAct)
         self.editMenu.addAction(self.decreaseScaleAct)
@@ -1806,6 +1822,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewMenu.addAction(self.zoomOutAct)
         self.viewMenu.addAction(self.zoomAllAct)
         self.viewMenu.addAction(self.zoomSelectionAct)
+        self.viewMenu.addAction(self.zoomParentAct)
         self.viewMenu.addSeparator()
 
         self.viewMenu.addAction(self.presentationModeAct)
@@ -1821,10 +1838,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewMenu.addAction(self.runStreamingServerAct)
         self.viewMenu.addSeparator()
         self.viewMenu.addAction(self.viewsAct)
+        self.viewMenu.addAction(self.contentsAct)
+        self.viewMenu.addAction(self.typingHintsAct)
         self.viewMenu.addAction(self.viewsFirstAct)
         self.viewMenu.addAction(self.viewsHomeAct)
         self.viewMenu.addAction(self.viewsNextAct)
         self.viewMenu.addAction(self.viewsPreviousAct)
+
+        self.settingsMenu = self.menuBar().addMenu(self.tr('Settings'))
+        self.settingsMenu.addAction(self.doingStateAct)
+        def refresh_task_settings():
+            blocker = QtCore.QSignalBlocker(self.doingStateAct)
+            self.doingStateAct.setChecked(tasks.doing_enabled())
+            del blocker
+        self.settingsMenu.aboutToShow.connect(refresh_task_settings)
 
         self.recMenu = self.menuBar().addMenu(self.tr("&Recording"))
         self.recMenu.addAction(self.recStartAct)
@@ -1839,11 +1866,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.menuBar().addSeparator()
 
         self.helpMenu = self.menuBar().addMenu(self.tr("&Help"))
+        self.helpMenu.addAction(self.keyboardShortcutsAct)
         self.helpMenu.addAction(self.aboutAct)
 
     def updateRecentFilesMenu(self):
-        settings = QtCore.QSettings("Ectropy", "Nexus")
-        files = settings.value('recentFileList', [])
+        files, _ = welcome.history()
 
         numRecentFiles = min(len(files), self.MaxRecentFiles)
 
@@ -1860,23 +1887,38 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def createToolBars(self):
         self.fileToolBar = self.addToolBar(self.tr("File"))
-        self.fileToolBar.setIconSize(QtCore.QSize(CONFIG['icon_size'],
-                                                  CONFIG['icon_size']))
+        self.fileToolBar.setIconSize(QtCore.QSize(24, 24))
         self.fileToolBar.addAction(self.newAct)
         self.fileToolBar.addAction(self.openAct)
 
         self.editToolBar = self.addToolBar(self.tr("Edit"))
-        self.editToolBar.setIconSize(QtCore.QSize(CONFIG['icon_size'],
-                                                  CONFIG['icon_size']))
+        self.editToolBar.setIconSize(QtCore.QSize(24, 24))
         self.editToolBar.addAction(self.undoAct)
         self.editToolBar.addAction(self.cutAct)
         self.editToolBar.addAction(self.copyAct)
         self.editToolBar.addAction(self.pasteAct)
         self.editToolBar.addAction(self.deleteAct)
+        self.textModeButton = QtWidgets.QToolButton(self)
+        self.textModeButton.setDefaultAction(self.textModeAct)
+        self.textModeButton.setText('Text')
+        self.view.inline.modeChanged.connect(lambda enabled: self.textModeButton.setText('Text'))
+        self.editToolBar.addWidget(self.textModeButton)
+        self.todoModeButton = QtWidgets.QToolButton(self)
+        self.todoModeButton.setDefaultAction(self.todoModeAct)
+        self.todoModeButton.setText('Todo OFF')
+        self.editToolBar.addWidget(self.todoModeButton)
+        self.fullEditorButton = QtWidgets.QToolButton(self)
+        self.fullEditorButton.setDefaultAction(self.fullEditorAct)
+        self.fullEditorButton.setText('Editor')
+        self.editToolBar.addWidget(self.fullEditorButton)
+        self.childSizeButton = QtWidgets.QToolButton(self)
+        self.childSizeButton.setDefaultAction(self.childSizeAct)
+        self.childSizeButton.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.childSizeButton.setText('Size')
+        self.editToolBar.addWidget(self.childSizeButton)
 
         self.viewToolBar = self.addToolBar(self.tr("View"))
-        self.viewToolBar.setIconSize(QtCore.QSize(CONFIG['icon_size'],
-                                                  CONFIG['icon_size']))
+        self.viewToolBar.setIconSize(QtCore.QSize(24, 24))
         self.viewToolBar.addAction(self.zoomInAct)
         self.viewToolBar.addAction(self.zoomOutAct)
         self.viewToolBar.addAction(self.zoomSelectionAct)
@@ -1887,6 +1929,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewToolBar.addAction(self.viewsNextAct)
 
         self.modeToolBar = self.addToolBar(self.tr("Mode"))
+        self.modeToolBar.setIconSize(QtCore.QSize(24, 24))
         self.modeToolBar.addAction(self.editModeAct)
         self.modeToolBar.addAction(self.presentationModeAct)
         self.modeToolBar.addAction(self.recordModeAct)
@@ -1901,12 +1944,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recToolBar.addWidget(self.recSourceCombo)
 
         self.filterEdit = FilterEdit()
+        self.filterEdit.setMinimumWidth(90)
+        self.filterEdit.setMaximumWidth(160)
         self.filterToolBar = self.addToolBar(self.tr("Filter"))
         self.filterToolBar.addWidget(self.filterEdit)
         self.filterToolBar.addAction(self.filterClearAct)
         self.filterToolBar.addAction(self.filterRunAct)
-        self.filterToolBar.setIconSize(QtCore.QSize(CONFIG['icon_size'],
-                                                    CONFIG['icon_size']))
+        self.filterToolBar.setIconSize(QtCore.QSize(24, 24))
         self.filterEdit.runfilter.connect(self.sceneFilterStems)
         self.filterRunAct.triggered.connect(self.filterEdit.editingFinished2)
         self.filterClearAct.triggered.connect(self.filterEdit.clear)
@@ -1919,49 +1963,110 @@ class MainWindow(QtWidgets.QMainWindow):
         logging.info("Statusbar: {}".format(msg))
 
     def readSettings(self):
-        settings = QtCore.QSettings("Ectropy", "Nexus")
-        pos = settings.value('pos', QtCore.QPoint(200, 200))
-        size = settings.value('size', QtCore.QSize(400, 400))
-        self.resize(size)
-        self.move(pos)
+        window_layout.restore(self)
 
     def writeSettings(self):
-        settings = QtCore.QSettings("Ectropy", "Nexus")
-        settings.setValue('pos', self.pos())
-        settings.setValue('size', self.size())
+        window_layout.save(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, '_initialLayoutTimer') and not self._initialLayoutDone:
+            self._initialLayoutDone = True
+            self._initialLayoutTimer.start(0)
+
+    def fitInitialMap(self):
+        if not self.isVisible() or self.scene.mode != 'edit':
+            return
+        window_layout.size_contents(self)
+        self.layout().activate()
+        rect = QtCore.QRectF()
+        for stem in self.scene.visibleStemsById().values():
+            rect = rect.united(stem.sceneBoundingRect())
+        if not rect.isEmpty():
+            self.view.fitInView(rect.adjusted(-20, -20, 20, 20), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+
+    def rememberEditingLayout(self):
+        if self.scene.mode == 'edit':
+            self._editingGeometry = self.saveGeometry()
+            self._editingContentsWidth = self.contentsDock.width()
 
     def undo(self):
-        changeditems = self.scene.graph.undo()
-        # first pass - refresh the whole lot
-        # TODO more efficient undo by looking at changeditems
-        changedtypes = [t for t, uid in changeditems]
-        if '+' in changedtypes:
-            # Refresh the whole lot as we don't know where it was removed from
-            self.scene.root().renew()
+        if self.view.inline.item is not None:
+            self.view.inline.item.document().undo()
+        else:
+            self.scene.undo()
+
+    def editCommand(self, command):
+        item = self.view.inline.item
+        if item is None:
+            getattr(self.scene, command)()
             return
+        cursor = item.textCursor()
+        if command in ('copy', 'cut') and cursor.hasSelection():
+            QtWidgets.QApplication.clipboard().setText(cursor.selectedText().replace('\u2029', '\n'))
+        if command == 'cut':
+            cursor.removeSelectedText()
+        elif command == 'delete':
+            if cursor.hasSelection():
+                cursor.removeSelectedText()
+            else:
+                cursor.deleteChar()
+        elif command == 'paste':
+            self.view.inline.handleKey(QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress,
+                QtCore.Qt.Key.Key_V, QtCore.Qt.KeyboardModifier.ControlModifier))
+            return
+        item.setTextCursor(cursor)
 
-        changeduids = [uid for t, uid in changeditems]
+    def findNode(self):
+        current = getattr(self, '_nodeSearchDialog', None)
+        if current is not None and current.isVisible():
+            current.reject()
+            return
+        self.view.inline.finish()
+        if self.view.inline.item is not None or self.scene.mode != 'edit' or self.editDialog.isVisible():
+            return
+        dialog = current
+        if dialog is None:
+            dialog = workflow.NodeSearchDialog(self)
+            self._nodeSearchDialog = dialog
+        else:
+            dialog.refreshIndex()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.search.setFocus()
 
-        allchidren = []
-        parents = []
-        for item in self.scene.allChildStems(includeroot=True):
-            if item.node['uid'] in changeduids:
-                parent = item.parentItem()
-                if parent is None:
-                    parents.append(item)
-                else:
-                    parents.append(parent)
-                    allchidren.append(item)
-                allchidren.extend(item.allChildStems())
+    def showChildSize(self):
+        if self.scene.mode != 'edit' or self.editDialog.isVisible():
+            return
+        self.view.inline.finish()
+        if self.view.inline.item is not None:
+            return  # A failed text save must not be discarded by opening a tool.
+        dialog = getattr(self, '_childSizeDialog', None)
+        if dialog is None:
+            dialog = self._childSizeDialog = branch_size.ChildSizeDialog(self)
+        if not dialog.isVisible():
+            dialog.refresh()
+            dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.percent.setFocus()
+        dialog.percent.selectAll()
 
-        for p in parents:
-            if p not in allchidren:
-                p.renew()
+    def createRecoverySnapshot(self):
+        self.view.inline.checkpoint()
+        if self.recovery.capture(force=True) is not None:
+            self.showMessage('Recovery snapshot created')
 
-        # TODO sometimes no parents?!
-        # TODO happens when reversing a hide as the stems are no longer in scene!
-        if len(parents) == 0:
-            self.scene.root().renew()
+    def openFullEditor(self):
+        self.view.inline.finish(keep_blank=True)
+        if self.view.inline.item is not None:
+            return
+        selected = [s for s in self.scene.selectedItems() if isinstance(s, graphics.StemItem)]
+        if len(selected) == 1:
+            selected[0].editStem(full=True)
+        elif len(selected) > 1:
+            self.scene.statusMessage.emit('Select one node to open the full editor')
 
     def loadOrConvertMap(self, filename):
         '''
@@ -2546,6 +2651,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.viewcurrentstep += 1
 
     def setMode(self):
+        self.view.inline.finish()
+        self.view.selection.reset()
 
         # The current checked status of the action is the new state after button presses etc
         if self.presentationModeAct.isChecked():
@@ -2564,18 +2671,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setEditingMode()
 
     def setEditingMode(self):
+        previous_mode = self.scene.mode
         self.scene.presentation = False
         self.scene.mode = "edit"
         # self.presentationModeAct.setChecked(False)
         logging.debug("Switching on edit mode")
 
-        # TODO Need to store geometry of window on first use
-        # show Normal seems too abrupt after full screen
-        # Seems to not store maximised state on a mac?
-
-        self.setWindowFlags(self._windowflags)
-        self.showNormal()
-        # self.showMaximized()
+        # Startup must not force a restored maximized window back to normal.
+        if previous_mode != 'edit':
+            self.setWindowFlags(self._windowflags)
+            if hasattr(self, '_editingGeometry'):
+                self.restoreGeometry(self._editingGeometry)
+            else:
+                self.setWindowState(QtCore.Qt.WindowState.WindowNoState)
+            self.show()
 
         self.view.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -2613,7 +2722,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.editModeAct.setShortcut(self.tr("Ctrl+E"))
 
     def setPresentationMode(self):
-
+        self.rememberEditingLayout()
         self.scene.mode = "presentation"
         logging.debug("Switching on presentation mode")
 
@@ -2668,7 +2777,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # self.showNormal()
 
     def setRecordingMode(self):
-
+        self.rememberEditingLayout()
         self.scene.mode = "record"
         logging.debug("Switching on record mode")
 
