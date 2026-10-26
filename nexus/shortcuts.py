@@ -75,6 +75,8 @@ def shortcut_rows(owner):
         ('Editor — tools', 'P / B', 'Pen tool'),
         ('Editor — tools', 'H', 'Highlighter tool'),
         ('Editor — tools', 'E', 'Eraser tool'),
+        ('Editor — tools', key_label(QtGui.QKeySequence('Ctrl+Z')),
+         'Undo the last pen/highlighter stroke drawn since opening this editor; while typing, undo text'),
     ))
     editor = owner if hasattr(owner, 'textmode') else getattr(window, 'editDialog', None)
     if editor is not None:

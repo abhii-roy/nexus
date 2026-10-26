@@ -128,8 +128,10 @@ While a text cursor is active on the map:
   Enter and Tab do not create further nodes from an empty note.
 - Letters, arrows, Backspace/Delete, Cmd+A/C/X/V/Z and Cmd+B/I/U belong to text,
   not map actions. Cmd+Z undoes text while typing, and map changes after finishing.
-- Pasted text stays in one node, including newlines, without extra HTML/image
-  content. Use Cmd+Enter for images or drawings. Held-key repeats and input-method
+- Pasted text stays in one node, including newlines, without extra HTML
+  formatting. Clipboard images paste directly into the selected/current node
+  with Cmd+V; use Cmd+Enter for drawings or detailed mixed-content editing.
+  Held-key repeats and input-method
   preedit confirmation do not repeatedly create nodes.
 - Text is checkpointed after a short pause, and saved before changing nodes or
   opening the popup. Checkpoints share one map Undo entry per typing session.
@@ -158,6 +160,18 @@ with resize handles, and Fit content beside the zoom controls shows the whole
 node without changing its saved layout. Copy provides both editable Nexus
 content and a transparent image for other apps, excluding the editor grid.
 
+On the map, Cmd+V pastes a clipboard image into one selected node, without
+opening the editor or creating a child. While typing, text is saved first and
+inline editing ends only after successful image insertion. Images go below
+existing content with a 24-unit gap, preserve original pixels and proportions,
+and initially fit within 380 by 280 canvas units (small images are not enlarged;
+Retina uses logical size). Existing content and child positions stay unchanged.
+The initial image can shrink further to leave room before nearby labels;
+existing nodes are not automatically rearranged.
+Cmd+Z reverses the paste; a newly entered node's image shares its creation Undo.
+Copied Nexus branches and ordinary text retain their previous paste behavior.
+Select one node; for an iconified node, show its contents with I before pasting.
+
 On the map, select one node and approach a corner to reveal its blue resize
 handle. Only the nearby handle appears; it hides when the pointer leaves and
 stays visible during dragging. Drag the handle to resize the node's text,
@@ -179,6 +193,9 @@ selects Text and P selects Pen (B remains an alias). Letters stay ordinary
 text while typing. Enter saves and closes directly; Shift+Enter adds a newline.
 The editor's bottom strip shows the active mode (Typing, Select, Text, Pen,
 Highlighter, Eraser or Properties) and the relevant Escape hint.
+Cmd+Z (also physical Ctrl+Z on Mac) removes the last pen/highlighter stroke
+drawn since opening this editor, one stroke per press. While typing it undoes
+text instead. It does not undo pre-existing drawings or map structure.
 
 * Todo mode and checkboxes
 
